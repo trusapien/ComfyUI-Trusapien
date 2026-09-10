@@ -7,3 +7,7 @@ license = "MIT"
 
 [project.urls]
 Repository = "https://github.com/trusapien/ComfyUI-Trusapien"
+
+[tool.comfy]
+PublisherId = "trusapien"
+DisplayName = "ComfyUI-Trusapien"
