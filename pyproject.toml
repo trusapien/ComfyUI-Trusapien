@@ -1,0 +1,9 @@
+[project]
+name = "comfyui-trusapien"
+version = "0.1.0"
+description = "Enterprise creative validation, attention heatmaps, and campaign impact scoring by Trusapien."
+publisher = "trusapien"
+license = "MIT"
+
+[project.urls]
+Repository = "https://github.com/trusapien/ComfyUI-Trusapien"
