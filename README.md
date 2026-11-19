@@ -1,137 +1,118 @@
 # ComfyUI-Trusapien
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-[![ComfyUI Registry](https://img.shields.io/badge/ComfyUI-Custom--Node-purple.svg)](https://github.com/comfyanonymous/ComfyUI)
-[![Platform Status](https://img.shields.io/badge/API-Private%20Beta-orange.svg)](https://trusapien.com)
-[![ISO 27001 Certified](https://img.shields.io/badge/Security-ISO%2027001-green.svg)](https://trusapien.com)
+A ComfyUI node that sends an image to the [Trusapien](https://trusapien.com) Creative Validation API and brings back a predicted-attention heat map and the analysis metrics, so an ad creative can be checked inside the workflow that made it.
 
-Official ComfyUI custom nodes for **[Trusapien](https://trusapien.com)** — bringing enterprise-grade consumer-neuroscience models, attention heatmaps, and campaign impact scoring directly into your generative workflows.
-
----
-
-> 🔒 **Private Beta Access Required**
-> 
-> The Trusapien API is currently in gated private beta. You can install and test this custom node today; however, running live inference requires an API key. 
-> 
-> 👉 **[Join the Trusapien Waitlist](https://trusapien.com)** — *Mention "ComfyUI" in your submission for priority developer onboarding.*
-
----
-
-## Overview
-
-**Trusapien Creative Validation** allows creators, marketing teams, and automation engineers to validate generated campaign assets in real time inside ComfyUI. Instead of exporting images and manually analyzing them, you can evaluate predicted human visual attention and impact scores directly within your generation pipeline.
+> **Private beta.** The node needs a Trusapien API key, and keys are not self-serve yet. Ask for one at [trusapien.com](https://trusapien.com) and mention ComfyUI.
 
 ```text
-[ SDXL / Flux Sampler ] ──► [ Trusapien Creative Validation ] ──┬──► [ Visual Attention Heatmap ]
-                                                                └──► [ Impact & Objectives Score ]
-
+[ Sampler / Load Image ] ──► [ Trusapien Creative Validation ] ──┬──► heatmap  (IMAGE)
+                                                                 ├──► image    (IMAGE, unchanged)
+                                                                 ├──► metrics_json (STRING)
+                                                                 └──► status   (STRING)
 ```
 
----
+## What it does
 
-## Key Capabilities
+- Uploads each image in the batch as a PNG and waits for the analysis, up to five minutes.
+- Returns the chosen heat map at the input image's size, the untouched image, and the metrics as JSON.
+- **The same image is analysed once.** Running a workflow again with an unchanged image reads the earlier result; it is not charged a second time.
+- Stops the workflow with a readable error when there is no key, the key is refused, or the analysis fails. It never passes the image on as if it had been analysed.
 
-* **Predicted Attention Heatmaps**: Generate visual overlays showing where human gaze lands during the first 3 seconds of exposure.
-* **Campaign Objective Scoring**: Measure asset alignment against preset marketing and brand guidelines.
-* **Non-Destructive Tensor Pass-Through**: The node outputs both the original image tensor and the analyzed heatmap overlay for seamless workflow chaining.
-* **Enterprise Security**: Grounded in ISO 27001 and ISO 27701 certified architecture.
+Each image is one paid analysis. A batch is limited to 8 images.
 
----
+## Node: `Trusapien Creative Validation`
 
-## Node Reference
+### Inputs
 
-### `Trusapien Creative Validation`
-
-#### Inputs
-
-| Parameter | Type | Required | Default | Description |
+| Name | Type | Required | Default | What it is |
 | --- | --- | --- | --- | --- |
-| `image` | `IMAGE` | Yes | — | Image tensor output from any sampler, loader, or upscale node. |
-| `api_key` | `STRING` | Yes | `""` | Your Trusapien platform API key (e.g., `tru_live_...`). |
-| `analysis_mode` | `COMBO` | No | `Attention Heatmap` | Select evaluation type: `Attention Heatmap`, `Impact Score`, or `Full Suite`. |
-| `target_audience` | `STRING` | No | `General` | Optional demographic or market filter for visual attention modeling. |
+| `image` | `IMAGE` | yes | | The image, or a batch of up to 8. |
+| `heatmap` | choice | yes | `Attention` | Which map to return: `Attention`, `Fog`, `Cognitive Demand`, `Engagement`, `Memory`, `Clarity`, `Trust`, `Intent`, `Avoidance`. |
+| `api_key` | `STRING` | no | empty | Your key. Leave empty to use the `TRUSAPIEN_API_KEY` environment variable. |
+| `objectives_json` | `STRING` | no | empty | What the creative is for (see below). With it, the result also carries benchmarks and an impact score. |
 
-#### Outputs
+### Outputs
 
-| Output Name | Type | Description |
+| Name | Type | What it is |
 | --- | --- | --- |
-| `IMAGE` | `IMAGE` | Visual attention heatmap overlay rendered as an image tensor. |
-| `METRICS_JSON` | `STRING` | JSON string containing numeric scores (Impact Score, Attention Index, Clarity Score). |
-| `STATUS` | `STRING` | Execution status or detailed error response from the Trusapien API. |
+| `heatmap` | `IMAGE` | The chosen map, one per input image, at the input's size. |
+| `image` | `IMAGE` | The input, unchanged, for chaining. |
+| `metrics_json` | `STRING` | `validation_id`, `metrics`, `objectives`, `benchmarks`, `impact`, and the names of the maps the analysis produced. A list when the batch has more than one image. |
+| `status` | `STRING` | For example `Analysed 1 image.` |
 
----
+Not every analysis produces every map. If the one you chose is missing, the error names the maps that exist.
 
-## Installation
+### Objectives
 
-### Method 1: ComfyUI Manager (Recommended)
+Benchmarks and the impact score are read against what the creative is for. `objectives_json` takes all six fields or none:
 
-1. Open **ComfyUI Manager** in your browser interface.
-2. Search for `ComfyUI-Trusapien`.
-3. Click **Install**.
-4. Restart your ComfyUI server.
-
-### Method 2: Manual Git Installation
-
-Run the following commands in your terminal:
-
-```bash
-# Navigate to your ComfyUI custom nodes folder
-cd ComfyUI/custom_nodes/
-
-# Clone the repository
-git clone [https://github.com/trusapien/ComfyUI-Trusapien.git](https://github.com/trusapien/ComfyUI-Trusapien.git)
-
-# Install Python dependencies
-cd ComfyUI-Trusapien
-pip install -r requirements.txt
-
+```json
+{
+  "purpose": "...",
+  "industry_category": "...",
+  "industry_subcategory": "...",
+  "usecase_category": "...",
+  "usecase_subcategory": "...",
+  "platform": "..."
+}
 ```
 
-Restart your ComfyUI server after installation completes.
+The accepted values are a fixed set and not every combination exists; the list is not published here yet. A combination that is not accepted does not cost the analysis: the metrics and maps still come back, with the reason under `objectives_error`.
 
----
+## Your API key
 
-## Quickstart Workflow
-
-1. Open ComfyUI and double-click the canvas.
-2. Search for **Trusapien Creative Validation**.
-3. Connect the `IMAGE` output of your `KSampler` or `Load Image` node to the `image` input of the Trusapien node.
-4. Enter your API key into the `api_key` field.
-5. Connect the `IMAGE` output of the Trusapien node to a `Preview Image` or `Save Image` node.
-6. Click **Queue Prompt**.
-
----
-
-## Troubleshooting & Common Issues
-
-This message appears when the `api_key` field is empty or contains an unverified key. Ensure your key starts with `tru_live_` or `tru_test_`. If you do not have a key, request access at [trusapien.com](https://trusapien.com).
-
-Your ComfyUI Python environment is missing required dependencies. Run:
+Prefer the environment variable, set before ComfyUI starts:
 
 ```bash
-pip install -r requirements.txt
-
+export TRUSAPIEN_API_KEY=cv_...
 ```
 
-If using a standalone ComfyUI portable environment on Windows, use:
+A key typed into the node is saved in the workflow file and in the metadata of the images ComfyUI writes. If you share either, you share the key.
+
+## Install
+
+**ComfyUI Manager:** search for `ComfyUI-Trusapien`, install, restart ComfyUI.
+
+**By hand:**
+
+```bash
+cd ComfyUI/custom_nodes
+git clone https://github.com/trusapien/ComfyUI-Trusapien.git
+pip install -r ComfyUI-Trusapien/requirements.txt
+```
+
+On the Windows portable build:
 
 ```cmd
-python_embedded\python.exe -m pip install -r custom_nodes\ComfyUI-Trusapien\requirements.txt
-
+python_embeded\python.exe -m pip install -r ComfyUI\custom_nodes\ComfyUI-Trusapien\requirements.txt
 ```
 
----
+Restart ComfyUI. `trusapien_example_workflow.json` is a three-node workflow to start from: Load Image, the Trusapien node, Preview Image.
 
-## Security & Enterprise Compliance
+## Errors you may see
 
-* **Data Privacy**: Input images sent to the Trusapien API are processed securely in ISO 27001 certified environments and are never used to train base models without consent.
-* **Region Hosting**: Supports enterprise regional hosting requirements (EU / North America).
-* Learn more at the [Trusapien Trust Centre](https://trusapien.com).
+| Message | What to do |
+| --- | --- |
+| `No Trusapien API key` | Set `TRUSAPIEN_API_KEY` or fill `api_key`. |
+| `The Trusapien API key was not recognised` | Check the key; ask for a new one if it was replaced. |
+| `The image was not accepted: ...` | The reason follows (format or size). |
+| `The analysis did not finish in 300 seconds` | It is still running. Queue the workflow again to pick up the result without a second charge. |
+| `Too many of your validations are still being processed` | Wait for the running ones to finish. |
+| `The Trusapien API could not be reached` | Network, or the service is down. |
 
----
+## Your data
+
+Images you send are stored by Trusapien together with their results for 30 days, then deleted. The analysis itself is performed by a third-party provider that Trusapien passes the image to; its copy is deleted at the same time. Do not send images you are not allowed to share with a processor.
+
+## Development
+
+```bash
+pip install requests pillow numpy pytest
+pytest tests                 # no ComfyUI or torch needed
+```
+
+`tests/test_live.py` runs against a real API when `TRUSAPIEN_TEST_API_URL` and `TRUSAPIEN_TEST_API_KEY` are set. `TRUSAPIEN_API_URL` points the node itself at another address.
 
 ## License
 
-Distributed under the MIT License. See [`LICENSE`](https://www.google.com/search?q=LICENSE) for details.
-
-```
+MIT. See [`LICENSE`](LICENSE).
