@@ -1,9 +1,9 @@
 [project]
 name = "comfyui-trusapien"
-version = "0.1.0"
-description = "Enterprise creative validation, attention heatmaps, and campaign impact scoring by Trusapien."
-publisher = "trusapien"
+version = "0.2.0"
+description = "Creative validation for ad images inside ComfyUI: attention heat maps and predicted-attention metrics from the Trusapien API."
 license = "MIT"
+dependencies = ["requests>=2.28.0", "Pillow>=9.0.0", "numpy>=1.20.0"]
 
 [project.urls]
 Repository = "https://github.com/trusapien/ComfyUI-Trusapien"
