@@ -23,11 +23,18 @@ Trusapien Creative Validation API and holds no logic of its own beyond that.
   node (LoadImage `example.png` -> node -> two previews, a Note about
   `TRUSAPIEN_API_KEY`, no key anywhere) and run inside ComfyUI against the stub
   with `run_in_comfyui.py --example`: heat map produced at the input size; 18/18
-  still pass. `assets/workflow_demo.png` still shows the old placeholder workflow.
+  still pass. `assets/workflow_demo.png` still shows the old placeholder workflow
+  (no longer referenced by the README).
+- 2026-11-22 (docs): README rewritten for users and checked claim by claim
+  against the code (map choices = `MAPS`, batch limit, 300 s, error sentences,
+  exactly what makes a rerun free); no service address, no vendor name. The
+  three error sentences built from split literals were compared by hand.
+  `PUBLISH.md` added: Kaan's registry release steps, checked against the
+  registry docs and publish-node-action on that date.
 - **Never run against the production API, nor against the real service with its
   analysis vendor.** No GPU, no browser UI.
-- `DEFAULT_API_URL` (`https://creative-validation.trusapien.com`) is a proposed
-  address, not a live one.
+- `DEFAULT_API_URL` is `https://creative-api.trusapien.com`, the service's public address since
+  2026-11-22. The node has not been run against it yet.
 
 ## Layout
 - `trusapien_client.py`: the HTTP client. No ComfyUI, no torch. Upload, poll,
@@ -57,6 +64,11 @@ Trusapien Creative Validation API and holds no logic of its own beyond that.
 - `.github/workflows/`: `test.yml` (pytest on 3.10 and 3.12), `publish.yml`
   (on a `v*` tag: checks tag == `v<version>`, runs the tests, then
   `Comfy-Org/publish-node-action@main` with the `REGISTRY_ACCESS_TOKEN` secret).
+- `README.md`: for users (install, key, cost, reruns, node reference, errors).
+  Every error sentence it quotes must match the code; change both together.
+- `PUBLISH.md`: maintainer release steps (publisher, icon, token, secret,
+  address, version, tag, verify, failures) and the before-first-publish
+  checklist. Release steps live there, not here.
 
 ## Rules
 - **Every image is one paid analysis.** Keep the idempotency key a hash of the
