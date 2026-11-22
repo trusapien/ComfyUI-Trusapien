@@ -14,6 +14,11 @@ Trusapien Creative Validation API and holds no logic of its own beyond that.
   and fixed there (greyscale and bfloat16 frames crashed `to_png`), and one
   found by it (fp16 frames gave different PNG bytes, so the same image was paid
   for twice). See "Verified inside ComfyUI".
+- 2026-11-22 (later): map choices checked against the result keys of the
+  service's first real run (all nine are among them; labels unchanged). A map
+  that is missing, listed but 404, or not an image, and an analysis with no
+  maps, each stop the prompt with one `[Trusapien] ...` sentence; rerun inside
+  ComfyUI, 18/18.
 - **Never run against the production API, nor against the real service with its
   analysis vendor.** No GPU, no browser UI.
 - `DEFAULT_API_URL` (`https://creative-validation.trusapien.com`) is a proposed
@@ -28,7 +33,7 @@ Trusapien Creative Validation API and holds no logic of its own beyond that.
   (a stand-in for the API), `run_in_comfyui.py` (drives the node through a
   running ComfyUI's HTTP API), `comfyui_dev_nodes/` (two dev nodes that run
   needs: a tensor probe and a dtype/channel cast; symlink into a *test* ComfyUI).
-- `tests/`: `pytest tests` (38 pass, 1 skip; `test_stub.py` runs the real
+- `tests/`: `pytest tests` (53 pass, 1 skip; `test_stub.py` runs the real
   client against the stub). `tests/pytest.ini` keeps pytest's
   root inside `tests/`; with it at the repository root pytest imports the root
   `__init__.py` as a package and its relative import fails.
@@ -46,7 +51,13 @@ Trusapien Creative Validation API and holds no logic of its own beyond that.
 
 ## Gotchas
 - Map names (`heat`, `fog`, `trust_heat`, ...) are the result-file names the API
-  returns under `results.`.
+  returns under `results.`. `MAPS` offers only names the service returned on its
+  first real run (`KNOWN_RESULT_KEYS` in `tests/test_client.py`). The labels are
+  stored in saved workflows: do not rename them. `Engagement` is
+  `engagement_new_heat` (the `engagement_new` metric).
+- Maps are named to the user by their `heatmap` label (`map_names`): in the
+  missing-map sentence and in `metrics_json["maps"]`; a result file the node
+  does not offer appears under its own name.
 - `torch` is imported inside `validate_creative`, so the tests run without it
   using a numpy stand-in. That checks the node's logic, not torch; torch itself
   is checked by `tools/run_in_comfyui.py`.
@@ -86,18 +97,22 @@ fp16 one.
 
 What it showed: the pack imports as a custom node (relative imports fine, no
 "IMPORT FAILED"); `/object_info/TrusapienValidationNode` gives the declared
-inputs, outputs and the nine map choices; `run_in_comfyui.py` passes 15/15:
+inputs, outputs and the nine map choices; `run_in_comfyui.py` passes 15/15
+(18/18 since the map-failure steps were added, same ComfyUI commit and versions):
 float32 `[B,H,W,3]` maps in 0..1 at the input size from half-size JPEGs; batches
 of 1, 2, 8 give B maps and B analyses; 9 is refused with no request sent; RGBA
 PNG, RGBA/grey/fp16/bf16/non-contiguous tensors work; the same image and
-objectives again (node executed, not cached) is no new analysis; a missing map
-and a 401 fail the prompt with the `[Trusapien] ...` sentence and no output.
+objectives again (node executed, not cached) is no new analysis; a missing map,
+no maps at all, a listed map that 404s, a map that is not an image, and a 401
+fail the prompt with the `[Trusapien] ...` sentence (a `RuntimeError` whose
+traceback stops at the node, no Pillow or requests frames) and no output.
 
 The stub (`tools/stub_service.py`) is what the client relies on, not the
 service's full contract: upload with Idempotency-Key, `processing` for 1 s then
 `done`, the nine `results.*` maps as JPEG at half size, the eleven metrics
 (made up), `objectives_error`/`benchmarks`/`impact` always null. Modes: `--omit
-MAP`, `--reject-all`, or `POST /_stub/mode` at runtime; `GET /_stub/stats`
+MAP`, `--missing-file MAP` (listed, 404), `--corrupt MAP` (listed, not an image),
+`--reject-all`, or `POST /_stub/mode` at runtime; `GET /_stub/stats`
 counts analyses (distinct keys).
 
 **Not done:** never against the production API or the real service (so not the
