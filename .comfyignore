@@ -1,0 +1,4 @@
+# Kept out of the Comfy Registry archive (development only; see CLAUDE.md "Layout").
+.github/
+tests/
+tools/
