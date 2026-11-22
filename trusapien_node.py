@@ -6,7 +6,7 @@ import json
 import numpy as np
 from PIL import Image
 
-from .trusapien_client import MAPS, Client, TrusapienError, parse_objectives, resolve_key, summary
+from .trusapien_client import MAPS, Client, TrusapienError, map_names, parse_objectives, resolve_key, summary
 
 #: Every image is one paid analysis, so a batch is bounded.
 MAX_BATCH = 8
@@ -56,16 +56,20 @@ def to_png(frame) -> bytes:
     return buffer.getvalue()
 
 
-def to_array(content: bytes, size) -> "np.ndarray":
-    """Result file bytes (JPEG, at the service's own size) as a [H, W, 3] float32 array at `size`."""
+def to_array(content: bytes, size, label="heat") -> "np.ndarray":
+    """Result file bytes (JPEG, at the service's own size) as a [H, W, 3] float32 array at `size`.
+
+    Anything Pillow cannot read (not an image, cut short, an odd mode) is a
+    sentence naming the map, not Pillow's traceback.
+    """
     try:
         picture = Image.open(io.BytesIO(content))
         picture.load()
+        picture = picture.convert("RGB")
+        if picture.size != size:
+            picture = picture.resize(size, Image.LANCZOS)  # Image.Resampling needs Pillow 9.1
     except Exception:
-        raise TrusapienError("The heat map the API returned could not be read as an image.") from None
-    picture = picture.convert("RGB")
-    if picture.size != size:
-        picture = picture.resize(size, Image.LANCZOS)  # Image.Resampling needs Pillow 9.1
+        raise TrusapienError(f"The {label} map the API returned could not be read as an image.") from None
     return np.ascontiguousarray(np.asarray(picture), dtype=np.float32) / np.float32(255.0)
 
 
@@ -124,9 +128,9 @@ class TrusapienValidationNode:
                 if content is None:
                     raise TrusapienError(
                         f"The analysis has no {heatmap} map for this image. "
-                        f"Maps it does have: {', '.join(summary(validation)['maps']) or 'none'}."
+                        f"Maps it does have: {', '.join(map_names(validation)) or 'none'}."
                     )
-                maps.append(torch.from_numpy(to_array(content, size)))
+                maps.append(torch.from_numpy(to_array(content, size, heatmap)))
                 results.append(summary(validation))
         except TrusapienError as error:
             # Raised, not returned: a workflow that carried on with the untouched

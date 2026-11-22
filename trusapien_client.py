@@ -16,10 +16,15 @@ import time
 
 import requests
 
-DEFAULT_API_URL = "https://creative-validation.trusapien.com"
+DEFAULT_API_URL = "https://creative-api.trusapien.com"
 USER_AGENT = "ComfyUI-Trusapien/0.2.0"
 
-#: Heat map choice in the node -> the result file's name at the API.
+#: Heat map choice in the node -> the result file's name at the API (`results.<name>`).
+#: Every name here is one the service returned on its first real run. The labels are
+#: what saved workflows hold, so they stay as they are. `Engagement` is the
+#: `engagement_new_heat` file, the only engagement map the service returns; it goes
+#: with the `engagement_new` metric (the metrics carry both `engagement` and
+#: `engagement_new`).
 MAPS = {
     "Attention": "heat",
     "Fog": "fog",
@@ -31,6 +36,7 @@ MAPS = {
     "Intent": "intent_heat",
     "Avoidance": "avoidance_heat",
 }
+_LABELS = {name: label for label, name in MAPS.items()}
 
 OBJECTIVE_FIELDS = (
     "purpose",
@@ -82,6 +88,22 @@ def idempotency_key(png: bytes, objectives) -> str:
     digest = hashlib.sha256(png)
     digest.update(json.dumps(objectives, sort_keys=True).encode())
     return "comfyui-" + digest.hexdigest()[:48]
+
+
+def map_label(name: str) -> str:
+    """A result file's name as the node's `heatmap` choice, or the name itself if it is not one."""
+    return _LABELS.get(name, name)
+
+
+def map_names(validation: dict) -> list:
+    """The maps an analysis has: the node's choice names in choice order, then any other result file."""
+    names = {
+        (entry.get("key") or "")[len("results."):]
+        for entry in validation.get("assets") or []
+        if (entry.get("key") or "").startswith("results.")
+    }
+    offered = [label for label, name in MAPS.items() if name in names]
+    return offered + sorted(name for name in names if name not in _LABELS)
 
 
 def _detail(response) -> str:
@@ -160,7 +182,12 @@ class Client:
             key = entry.get("key") or ""
             if key == wanted or key.endswith("." + name):
                 path = f"/v1/validations/{validation['id']}/assets/{key}"
-                return self._request("GET", path).content
+                try:
+                    return self._request("GET", path).content
+                except TrusapienError as error:
+                    raise TrusapienError(
+                        f"The analysis lists a {map_label(name)} map, but it could not be downloaded. {error}"
+                    ) from None
         return None
 
 
@@ -173,9 +200,5 @@ def summary(validation: dict) -> dict:
         "objectives_error": validation.get("objectives_error"),
         "benchmarks": validation.get("benchmarks"),
         "impact": validation.get("impact"),
-        "maps": sorted(
-            (entry.get("key") or "").split(".")[-1]
-            for entry in validation.get("assets") or []
-            if (entry.get("key") or "").startswith("results.")
-        ),
+        "maps": map_names(validation),
     }

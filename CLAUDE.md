@@ -14,10 +14,27 @@ Trusapien Creative Validation API and holds no logic of its own beyond that.
   and fixed there (greyscale and bfloat16 frames crashed `to_png`), and one
   found by it (fp16 frames gave different PNG bytes, so the same image was paid
   for twice). See "Verified inside ComfyUI".
+- 2026-11-22 (later): map choices checked against the result keys of the
+  service's first real run (all nine are among them; labels unchanged). A map
+  that is missing, listed but 404, or not an image, and an analysis with no
+  maps, each stop the prompt with one `[Trusapien] ...` sentence; rerun inside
+  ComfyUI, 18/18.
+- 2026-11-22 (example): `trusapien_example_workflow.json` rewritten for the current
+  node (LoadImage `example.png` -> node -> two previews, a Note about
+  `TRUSAPIEN_API_KEY`, no key anywhere) and run inside ComfyUI against the stub
+  with `run_in_comfyui.py --example`: heat map produced at the input size; 18/18
+  still pass. `assets/workflow_demo.png` still shows the old placeholder workflow
+  (no longer referenced by the README).
+- 2026-11-22 (docs): README rewritten for users and checked claim by claim
+  against the code (map choices = `MAPS`, batch limit, 300 s, error sentences,
+  exactly what makes a rerun free); no service address, no vendor name. The
+  three error sentences built from split literals were compared by hand.
+  `PUBLISH.md` added: Kaan's registry release steps, checked against the
+  registry docs and publish-node-action on that date.
 - **Never run against the production API, nor against the real service with its
   analysis vendor.** No GPU, no browser UI.
-- `DEFAULT_API_URL` (`https://creative-validation.trusapien.com`) is a proposed
-  address, not a live one.
+- `DEFAULT_API_URL` is `https://creative-api.trusapien.com`, the service's public address since
+  2026-11-22. The node has not been run against it yet.
 
 ## Layout
 - `trusapien_client.py`: the HTTP client. No ComfyUI, no torch. Upload, poll,
@@ -26,12 +43,32 @@ Trusapien Creative Validation API and holds no logic of its own beyond that.
 - `__init__.py`: the mappings ComfyUI scans for. Must stay at the root.
 - `tools/`: development only, never imported by the node. `stub_service.py`
   (a stand-in for the API), `run_in_comfyui.py` (drives the node through a
-  running ComfyUI's HTTP API), `comfyui_dev_nodes/` (two dev nodes that run
+  running ComfyUI's HTTP API; `--example` converts the saved UI-format example
+  workflow to an API prompt with `workflow_to_prompt` and runs it),
+  `comfyui_dev_nodes/` (two dev nodes that run
   needs: a tensor probe and a dtype/channel cast; symlink into a *test* ComfyUI).
-- `tests/`: `pytest tests` (38 pass, 1 skip; `test_stub.py` runs the real
-  client against the stub). `tests/pytest.ini` keeps pytest's
+- `tests/`: `pytest tests` (65 pass, 1 skip; `test_stub.py` runs the real
+  client against the stub; `test_workflow.py` checks the example workflow's links,
+  widget values against `INPUT_TYPES`, that no key is in it, and the converter;
+  `test_packaging.py` checks pyproject.toml against
+  requirements.txt and `USER_AGENT`, and skips on Python < 3.11 without `tomli`).
+  `tests/pytest.ini` keeps pytest's
   root inside `tests/`; with it at the repository root pytest imports the root
   `__init__.py` as a package and its relative import fails.
+- `pyproject.toml`: Comfy Registry metadata (field names from
+  docs.comfy.org/registry/specifications). Node id `trusapien-creative-validation`,
+  permanent once published; it, `PublisherId` and `Icon` are TODO(Kaan).
+  `requirements.txt` lists exactly `[project].dependencies` (never torch: ComfyUI
+  provides it). `.comfyignore` keeps `tests/`, `tools/`, `.github/` out of the
+  registry archive (`comfy node pack` shows what ships).
+- `.github/workflows/`: `test.yml` (pytest on 3.10 and 3.12), `publish.yml`
+  (on a `v*` tag: checks tag == `v<version>`, runs the tests, then
+  `Comfy-Org/publish-node-action@main` with the `REGISTRY_ACCESS_TOKEN` secret).
+- `README.md`: for users (install, key, cost, reruns, node reference, errors).
+  Every error sentence it quotes must match the code; change both together.
+- `PUBLISH.md`: maintainer release steps (publisher, icon, token, secret,
+  address, version, tag, verify, failures) and the before-first-publish
+  checklist. Release steps live there, not here.
 
 ## Rules
 - **Every image is one paid analysis.** Keep the idempotency key a hash of the
@@ -46,7 +83,13 @@ Trusapien Creative Validation API and holds no logic of its own beyond that.
 
 ## Gotchas
 - Map names (`heat`, `fog`, `trust_heat`, ...) are the result-file names the API
-  returns under `results.`.
+  returns under `results.`. `MAPS` offers only names the service returned on its
+  first real run (`KNOWN_RESULT_KEYS` in `tests/test_client.py`). The labels are
+  stored in saved workflows: do not rename them. `Engagement` is
+  `engagement_new_heat` (the `engagement_new` metric).
+- Maps are named to the user by their `heatmap` label (`map_names`): in the
+  missing-map sentence and in `metrics_json["maps"]`; a result file the node
+  does not offer appears under its own name.
 - `torch` is imported inside `validate_creative`, so the tests run without it
   using a numpy stand-in. That checks the node's logic, not torch; torch itself
   is checked by `tools/run_in_comfyui.py`.
@@ -55,7 +98,13 @@ Trusapien Creative Validation API and holds no logic of its own beyond that.
   and float16 (`--fp16-intermediates`) and with or without an alpha channel.
 - The service's maps are JPEG at its own size; `to_array` resizes them to the
   input's size and returns float32.
-- The version lives in two places: `pyproject.toml` and `USER_AGENT` in the client.
+- The example workflow is the browser's save format: `widgets_values` are
+  positional, in `INPUT_TYPES` order (`heatmap`, `api_key`, `objectives_json`).
+  Adding or reordering a widget input breaks it; `tests/test_workflow.py` says so.
+  `/prompt` does not take that format; `run_in_comfyui.py --example` converts it.
+- The version lives in two places: `pyproject.toml` and `USER_AGENT` in the
+  client; `tests/test_packaging.py` checks they match. A release is a `v<version>`
+  tag; `publish.yml` refuses any other tag.
 
 ## Verified inside ComfyUI
 Run on 2026-11-22, headless, in a fresh empty directory outside the repo (`$D`):
@@ -86,23 +135,36 @@ fp16 one.
 
 What it showed: the pack imports as a custom node (relative imports fine, no
 "IMPORT FAILED"); `/object_info/TrusapienValidationNode` gives the declared
-inputs, outputs and the nine map choices; `run_in_comfyui.py` passes 15/15:
+inputs, outputs and the nine map choices; `run_in_comfyui.py` passes 15/15
+(18/18 since the map-failure steps were added, same ComfyUI commit and versions):
 float32 `[B,H,W,3]` maps in 0..1 at the input size from half-size JPEGs; batches
 of 1, 2, 8 give B maps and B analyses; 9 is refused with no request sent; RGBA
 PNG, RGBA/grey/fp16/bf16/non-contiguous tensors work; the same image and
-objectives again (node executed, not cached) is no new analysis; a missing map
-and a 401 fail the prompt with the `[Trusapien] ...` sentence and no output.
+objectives again (node executed, not cached) is no new analysis; a missing map,
+no maps at all, a listed map that 404s, a map that is not an image, and a 401
+fail the prompt with the `[Trusapien] ...` sentence (a `RuntimeError` whose
+traceback stops at the node, no Pillow or requests frames) and no output.
+
+The example workflow (same commit and versions, fresh install, `example.png` from
+ComfyUI's own `input/`): `run_in_comfyui.py --example` sends LoadImage ->
+Trusapien (`Attention`, empty key, so `TRUSAPIEN_API_KEY` is used) -> two
+PreviewImage (the Note is not sent); 2/2: the heat map preview is 768x768 like
+`example.png` and differs from it; first run 1 new analysis, a rerun 0. The old
+file, run the same way, fails at `original.jpeg` (404).
 
 The stub (`tools/stub_service.py`) is what the client relies on, not the
 service's full contract: upload with Idempotency-Key, `processing` for 1 s then
 `done`, the nine `results.*` maps as JPEG at half size, the eleven metrics
 (made up), `objectives_error`/`benchmarks`/`impact` always null. Modes: `--omit
-MAP`, `--reject-all`, or `POST /_stub/mode` at runtime; `GET /_stub/stats`
+MAP`, `--missing-file MAP` (listed, 404), `--corrupt MAP` (listed, not an image),
+`--reject-all`, or `POST /_stub/mode` at runtime; `GET /_stub/stats`
 counts analyses (distinct keys).
 
 **Not done:** never against the production API or the real service (so not the
 real ~20 s analysis time, real objectives/benchmarks, or real error bodies); no
 GPU (the `.detach().cpu().float()` path is exercised on CPU tensors and a fake
 in the unit tests only); no browser UI, no ComfyUI Manager or registry install,
-no Windows portable build; `trusapien_example_workflow.json` (UI format) was not
-loaded: the run uses API-format prompts.
+no Windows portable build; `trusapien_example_workflow.json` was never opened in
+the browser: `--example` converts it to an API prompt by hand (same nodes, links
+and widget values), so how the frontend draws it (node sizes, the Note) is
+unchecked.

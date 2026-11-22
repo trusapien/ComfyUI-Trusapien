@@ -7,6 +7,10 @@ Development only. ComfyUI must have been started with this repository in
 
     python tools/run_in_comfyui.py --comfy http://127.0.0.1:8188 --stub http://127.0.0.1:8765
 
+With `--example`, it runs `trusapien_example_workflow.json` instead: the saved
+(UI-format) workflow is turned into an API-format prompt from its nodes, links
+and widget values (`workflow_to_prompt`), queued, and checked for a heat map.
+
 Everything goes through ComfyUI's HTTP API, the way the browser would send it:
 upload images, queue API-format prompts, read /history. Exits 0 only if every
 check passes. Needs Pillow and numpy; nothing from ComfyUI or torch.
@@ -21,13 +25,21 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
 NODE = "TrusapienValidationNode"
+EXAMPLE = Path(__file__).resolve().parents[1] / "trusapien_example_workflow.json"
+WIDGET_TYPES = {"COMBO", "STRING", "INT", "FLOAT", "BOOLEAN"}
+FRONTEND_ONLY = {"Note", "MarkdownNote"}  # drawn by the browser, never executed
 MAPS = [
     "Attention", "Fog", "Cognitive Demand", "Engagement", "Memory", "Clarity", "Trust", "Intent", "Avoidance",
+]
+RESULT_FILES = [  # the stub's result files, for its `omit` mode
+    "heat", "fog", "trust_heat", "intent_heat", "avoidance_heat", "memory_heat", "clarity_heat",
+    "cognitive_demand_heat", "engagement_new_heat",
 ]
 WIDTH, HEIGHT = 333, 217  # odd on purpose: the stub's maps come back at half size
 OBJECTIVES = json.dumps({
@@ -47,6 +59,55 @@ class Failed(AssertionError):
 def check(condition, message):
     if not condition:
         raise Failed(message)
+
+
+def _is_widget(spec):
+    kind = spec[0]
+    options = spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {}
+    return (isinstance(kind, list) or kind in WIDGET_TYPES) and not options.get("forceInput")
+
+
+def workflow_to_prompt(workflow, object_info):
+    """A saved UI-format workflow as the API-format prompt `/prompt` takes.
+
+    `/prompt` does not accept the file the browser saves: that one lists nodes
+    with positional `widgets_values` and links as `[id, from, slot, to, slot,
+    type]`. Each node's inputs are walked in its class's declared order
+    (`object_info`): a linked input becomes `[from_id, slot]`, a widget takes the
+    next `widgets_values` entry (plus the `control_after_generate` value the
+    browser stores after a seed). Values left over (LoadImage's "upload" button)
+    are not inputs. Note nodes are dropped; a muted, bypassed or unknown node is
+    refused rather than guessed at.
+    """
+    links = {link[0]: link for link in workflow["links"]}
+    prompt = {}
+    for node in workflow["nodes"]:
+        kind = node["type"]
+        if kind in FRONTEND_ONLY:
+            continue
+        check(kind in object_info, f"node {node['id']}: ComfyUI has no node type {kind!r}")
+        check(node.get("mode", 0) == 0, f"node {node['id']} ({kind}) is muted or bypassed")
+        info = object_info[kind]["input"]
+        order = object_info[kind].get("input_order") or {section: list(info.get(section, {})) for section in info}
+        linked = {item["name"]: links[item["link"]] for item in node.get("inputs", []) if item.get("link") is not None}
+        values = list(node.get("widgets_values") or [])
+        inputs = {}
+        for section in ("required", "optional"):
+            for name in order.get(section, []):
+                spec = info[section][name]
+                if _is_widget(spec):
+                    check(values, f"node {node['id']} ({kind}): no widget value left for {name!r}")
+                    inputs[name] = values.pop(0)
+                    options = spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {}
+                    if spec[0] == "INT" and options.get("control_after_generate") and values:
+                        values.pop(0)
+                if name in linked:  # a link wins over the widget value it replaces
+                    link = linked[name]
+                    inputs[name] = [str(link[1]), link[2]]
+                elif section == "required" and name not in inputs:
+                    raise Failed(f"node {node['id']} ({kind}): required input {name!r} is not connected")
+        prompt[str(node["id"])] = {"class_type": kind, "inputs": inputs}
+    return prompt
 
 
 class Http:
@@ -179,6 +240,9 @@ class Run:
         check(message.startswith("[Trusapien] "), f"error is not a [Trusapien] sentence: {message!r}")
         check(sentence in message, f"error {message!r} does not say {sentence!r}")
         check(error["node_id"] == "trusapien", f"error came from node {error['node_id']}")
+        check(error.get("exception_type") == "RuntimeError", f"raised {error.get('exception_type')}, not RuntimeError")
+        trace = "".join(error.get("traceback") or [])
+        check("PIL" not in trace and "requests" not in trace, "the traceback runs into Pillow or requests")
         check("save" not in entry["outputs"] and "probe" not in entry["outputs"], "outputs exist after a failure")
         return message
 
@@ -305,9 +369,34 @@ class Run:
             try:
                 self.free()
                 entry = self.queue(self.prompt(names[:1], heatmap="Trust"))
-                return self.failed_with(entry, "The analysis has no Trust map")
+                others = ", ".join(name for name in MAPS if name != "Trust")
+                return self.failed_with(
+                    entry, f"The analysis has no Trust map for this image. Maps it does have: {others}."
+                )
             finally:
                 self.stub.post("/_stub/mode", {"omit": []})
+
+        def no_maps():
+            self.stub.post("/_stub/mode", {"omit": RESULT_FILES})
+            try:
+                self.free()
+                entry = self.queue(self.prompt(names[:1]))
+                return self.failed_with(
+                    entry, "The analysis has no Attention map for this image. Maps it does have: none."
+                )
+            finally:
+                self.stub.post("/_stub/mode", {"omit": []})
+
+        def broken_map(mode, sentence):
+            def run():
+                self.stub.post("/_stub/mode", {mode: ["trust_heat"]})
+                try:
+                    self.free()
+                    entry = self.queue(self.prompt(names[:1], heatmap="Trust"))
+                    return self.failed_with(entry, sentence)
+                finally:
+                    self.stub.post("/_stub/mode", {mode: []})
+            return run
 
         def refused_key():
             self.stub.post("/_stub/mode", {"reject_all": True})
@@ -328,19 +417,87 @@ class Run:
             self.step(f"{mode} IMAGE tensor into the node", cast(mode))
         self.step("same image + objectives again: no new analysis", rerun_is_free)
         self.step("a map the analysis lacks fails the prompt", missing_map)
+        self.step("an analysis with no maps at all fails the prompt", no_maps)
+        self.step(
+            "a listed map whose download is a 404 fails the prompt",
+            broken_map(
+                "missing_files",
+                "The analysis lists a Trust map, but it could not be downloaded. "
+                "The Trusapien API answered with an error: No such asset.",
+            ),
+        )
+        self.step(
+            "a map that is not an image fails the prompt",
+            broken_map("corrupt", "The Trust map the API returned could not be read as an image."),
+        )
         self.step("a refused key (401) fails the prompt", refused_key)
 
+        return self.summary()
+
+    def summary(self):
         passed = sum(1 for ok, *_ in self.results if ok)
         print(f"\n{passed}/{len(self.results)} checks passed. Stub: {json.dumps(self.stats())}")
         return 0 if passed == len(self.results) else 1
+
+    def example(self, path):
+        """Run the saved example workflow, as a user who opened it would, and check its heat map."""
+        workflow = json.loads(Path(path).read_text(encoding="utf-8"))
+        state = {}
+
+        def convert():
+            state["prompt"] = prompt = workflow_to_prompt(workflow, self.comfy.get("/object_info"))
+            for key, node in prompt.items():
+                print(f"      {key}: {json.dumps(node)}", flush=True)
+            kinds = sorted(node["class_type"] for node in prompt.values())
+            check(NODE in kinds, f"no {NODE} in the prompt")
+            return f"{len(prompt)} nodes: {', '.join(kinds)}"
+
+        def run():
+            prompt = state["prompt"]
+            node_id = next(key for key, node in prompt.items() if node["class_type"] == NODE)
+            previews = {  # PreviewImage node id -> which Trusapien output it shows
+                key: node["inputs"]["images"][1] for key, node in prompt.items()
+                if node["class_type"] == "PreviewImage" and node["inputs"]["images"][0] == node_id
+            }
+            heat = next((key for key, slot in previews.items() if slot == 0), None)
+            check(heat is not None, "no PreviewImage shows the heatmap output")
+            source = next(node for node in prompt.values() if node["class_type"] == "LoadImage")["inputs"]["image"]
+            original = self.view({"filename": source, "type": "input"}).convert("RGB")
+
+            self.free()
+            before = self.stats()
+            entry = self.queue(prompt)
+            error = self.error_of(entry)
+            check(entry["status"].get("status_str") == "success", f"prompt failed: {error and error['exception_message']}")
+            after = self.stats()
+            for key in previews:
+                check(len(entry["outputs"].get(key, {}).get("images", [])) == 1, f"PreviewImage {key} shows no image")
+            heatmap = self.view(entry["outputs"][heat]["images"][0]).convert("RGB")
+            check(heatmap.size == original.size, f"heat map is {heatmap.size}, {source} is {original.size}")
+            difference = np.abs(np.asarray(heatmap, np.int16) - np.asarray(original, np.int16)).mean()
+            check(difference > 1.0, "the heat map preview is the input image")
+            return (
+                f"heat map {heatmap.size[0]}x{heatmap.size[1]} (= {source}), mean |map - input| {difference:.1f}/255; "
+                f"stub: {after['uploads'] - before['uploads']} upload, {after['analyses'] - before['analyses']} new analyses"
+            )
+
+        self.step(f"convert {Path(path).name} to an API prompt", convert)
+        if "prompt" in state:
+            self.step("queue it: the heat map preview is produced", run)
+        return self.summary()
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--comfy", default="http://127.0.0.1:8188")
     parser.add_argument("--stub", default="http://127.0.0.1:8765")
+    parser.add_argument(
+        "--example", nargs="?", const=str(EXAMPLE), metavar="WORKFLOW",
+        help="run a saved UI-format workflow (default: the repository's example) instead of the checks",
+    )
     options = parser.parse_args()
-    sys.exit(Run(options.comfy, options.stub).main())
+    run = Run(options.comfy, options.stub)
+    sys.exit(run.example(options.example) if options.example else run.main())
 
 
 if __name__ == "__main__":
