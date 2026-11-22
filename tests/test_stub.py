@@ -39,7 +39,8 @@ def test_an_upload_is_processed_then_done_with_every_metric_and_map(client_modul
     validation = client_module.Client("cv_key", base_url=url).validate(png(), interval=0.05, deadline=5)
     assert validation["status"] == "done"
     assert set(validation["metrics"]) == set(stub_module.METRICS)
-    assert client_module.summary(validation)["maps"] == sorted(stub_module.MAPS)
+    assert client_module.summary(validation)["maps"] == list(client_module.MAPS)  # every choice, in order
+    assert set(client_module.MAPS.values()) == set(stub_module.MAPS)
     assert state.stats()["requests"] >= 2  # it was polled at least once
 
 
@@ -70,7 +71,26 @@ def test_an_omitted_map_is_none_to_the_client(client_module, stub):
     client = client_module.Client("cv_key", base_url=url)
     validation = client.validate(png(), interval=0.05, deadline=5)
     assert client.asset(validation, "trust_heat") is None
-    assert "trust_heat" not in client_module.summary(validation)["maps"]
+    assert "Trust" not in client_module.summary(validation)["maps"]
+
+
+def test_a_listed_map_the_stub_will_not_serve_is_the_clients_sentence(client_module, stub):
+    url, state = stub
+    state.mode["missing_files"] = ["trust_heat"]
+    client = client_module.Client("cv_key", base_url=url)
+    validation = client.validate(png(), interval=0.05, deadline=5)
+    assert "Trust" in client_module.summary(validation)["maps"]
+    with pytest.raises(client_module.TrusapienError, match=r"lists a Trust map, but it could not be downloaded\. .*No such asset\."):
+        client.asset(validation, "trust_heat")
+
+
+def test_a_corrupt_map_is_served_as_bytes_that_are_no_image(client_module, node_module, stub):
+    url, state = stub
+    state.mode["corrupt"] = ["trust_heat"]
+    client = client_module.Client("cv_key", base_url=url)
+    content = client.asset(client.validate(png(), interval=0.05, deadline=5), "trust_heat")
+    with pytest.raises(client_module.TrusapienError, match="The Trust map the API returned could not be read"):
+        node_module.to_array(content, (40, 30), "Trust")
 
 
 def test_a_refused_key_is_the_clients_sentence(client_module, stub):
