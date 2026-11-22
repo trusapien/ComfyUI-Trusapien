@@ -15,11 +15,13 @@ running the same image again pays nothing. Failures can be switched on:
 
     python tools/stub_service.py --port 8765                     # all well
     python tools/stub_service.py --omit trust_heat               # that map is missing
+    python tools/stub_service.py --missing-file trust_heat       # listed, but its download is a 404
+    python tools/stub_service.py --corrupt trust_heat            # listed, served as bytes that are no image
     python tools/stub_service.py --reject-all                    # every key is refused (401)
 
 or while it runs, without a restart:
 
-    POST /_stub/mode   {"omit": ["trust_heat"], "reject_all": false}
+    POST /_stub/mode   {"omit": ["trust_heat"], "missing_files": [], "corrupt": [], "reject_all": false}
     GET  /_stub/stats  {"analyses": distinct keys, "uploads": POSTs, "requests": all API calls}
     POST /_stub/reset  forget everything (validations, counters, mode)
 """
@@ -66,10 +68,18 @@ METRICS = (
 
 
 class State:
-    def __init__(self, processing_seconds=1.0, omit=(), reject_all=False, reject_keys=()):
+    def __init__(
+        self, processing_seconds=1.0, omit=(), reject_all=False, reject_keys=(), missing_files=(), corrupt=()
+    ):
         self.lock = threading.Lock()
         self.processing_seconds = processing_seconds
-        self.default_mode = {"omit": list(omit), "reject_all": reject_all, "reject_keys": list(reject_keys)}
+        self.default_mode = {
+            "omit": list(omit),
+            "missing_files": list(missing_files),
+            "corrupt": list(corrupt),
+            "reject_all": reject_all,
+            "reject_keys": list(reject_keys),
+        }
         self.reset()
 
     def reset(self):
@@ -191,6 +201,10 @@ def make_handler(state: State):
             if parts[4] == "original":
                 return self._send(200, content=validation["original"], content_type="image/png")
             name = parts[4][len("results."):]
+            if name in state.mode["missing_files"]:
+                return self._send(404, {"detail": "No such asset."})
+            if name in state.mode["corrupt"]:
+                return self._send(200, content=b"<html>Bad gateway</html>", content_type="image/jpeg")
             width, height = validation["size"]
             jpeg = _map_jpeg(name, (max(1, width // 2), max(1, height // 2)))
             return self._send(200, content=jpeg, content_type="image/jpeg")
@@ -204,7 +218,7 @@ def make_handler(state: State):
             if path == "/_stub/mode":
                 change = json.loads(body or b"{}")
                 with state.lock:
-                    for field in ("omit", "reject_all", "reject_keys"):
+                    for field in ("omit", "missing_files", "corrupt", "reject_all", "reject_keys"):
                         if field in change:
                             state.mode[field] = change[field]
                 return self._send(200, state.mode)
@@ -264,10 +278,15 @@ def main():
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--processing-seconds", type=float, default=1.0)
     parser.add_argument("--omit", action="append", default=[], choices=MAPS, help="leave this map out")
+    parser.add_argument("--missing-file", action="append", default=[], choices=MAPS, help="list this map, answer 404")
+    parser.add_argument("--corrupt", action="append", default=[], choices=MAPS, help="list this map, serve non-image bytes")
     parser.add_argument("--reject-all", action="store_true", help="answer 401 to every key")
     parser.add_argument("--reject-key", action="append", default=[], help="answer 401 to this key")
     options = parser.parse_args()
-    state = State(options.processing_seconds, options.omit, options.reject_all, options.reject_key)
+    state = State(
+        options.processing_seconds, options.omit, options.reject_all, options.reject_key,
+        options.missing_file, options.corrupt,
+    )
     server = ThreadingHTTPServer((options.host, options.port), make_handler(state))
     print(f"Trusapien stub on http://{options.host}:{server.server_port}", flush=True)
     server.serve_forever()

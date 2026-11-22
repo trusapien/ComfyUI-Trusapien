@@ -29,6 +29,10 @@ NODE = "TrusapienValidationNode"
 MAPS = [
     "Attention", "Fog", "Cognitive Demand", "Engagement", "Memory", "Clarity", "Trust", "Intent", "Avoidance",
 ]
+RESULT_FILES = [  # the stub's result files, for its `omit` mode
+    "heat", "fog", "trust_heat", "intent_heat", "avoidance_heat", "memory_heat", "clarity_heat",
+    "cognitive_demand_heat", "engagement_new_heat",
+]
 WIDTH, HEIGHT = 333, 217  # odd on purpose: the stub's maps come back at half size
 OBJECTIVES = json.dumps({
     "purpose": "awareness",
@@ -179,6 +183,9 @@ class Run:
         check(message.startswith("[Trusapien] "), f"error is not a [Trusapien] sentence: {message!r}")
         check(sentence in message, f"error {message!r} does not say {sentence!r}")
         check(error["node_id"] == "trusapien", f"error came from node {error['node_id']}")
+        check(error.get("exception_type") == "RuntimeError", f"raised {error.get('exception_type')}, not RuntimeError")
+        trace = "".join(error.get("traceback") or [])
+        check("PIL" not in trace and "requests" not in trace, "the traceback runs into Pillow or requests")
         check("save" not in entry["outputs"] and "probe" not in entry["outputs"], "outputs exist after a failure")
         return message
 
@@ -305,9 +312,34 @@ class Run:
             try:
                 self.free()
                 entry = self.queue(self.prompt(names[:1], heatmap="Trust"))
-                return self.failed_with(entry, "The analysis has no Trust map")
+                others = ", ".join(name for name in MAPS if name != "Trust")
+                return self.failed_with(
+                    entry, f"The analysis has no Trust map for this image. Maps it does have: {others}."
+                )
             finally:
                 self.stub.post("/_stub/mode", {"omit": []})
+
+        def no_maps():
+            self.stub.post("/_stub/mode", {"omit": RESULT_FILES})
+            try:
+                self.free()
+                entry = self.queue(self.prompt(names[:1]))
+                return self.failed_with(
+                    entry, "The analysis has no Attention map for this image. Maps it does have: none."
+                )
+            finally:
+                self.stub.post("/_stub/mode", {"omit": []})
+
+        def broken_map(mode, sentence):
+            def run():
+                self.stub.post("/_stub/mode", {mode: ["trust_heat"]})
+                try:
+                    self.free()
+                    entry = self.queue(self.prompt(names[:1], heatmap="Trust"))
+                    return self.failed_with(entry, sentence)
+                finally:
+                    self.stub.post("/_stub/mode", {mode: []})
+            return run
 
         def refused_key():
             self.stub.post("/_stub/mode", {"reject_all": True})
@@ -328,6 +360,19 @@ class Run:
             self.step(f"{mode} IMAGE tensor into the node", cast(mode))
         self.step("same image + objectives again: no new analysis", rerun_is_free)
         self.step("a map the analysis lacks fails the prompt", missing_map)
+        self.step("an analysis with no maps at all fails the prompt", no_maps)
+        self.step(
+            "a listed map whose download is a 404 fails the prompt",
+            broken_map(
+                "missing_files",
+                "The analysis lists a Trust map, but it could not be downloaded. "
+                "The Trusapien API answered with an error: No such asset.",
+            ),
+        )
+        self.step(
+            "a map that is not an image fails the prompt",
+            broken_map("corrupt", "The Trust map the API returned could not be read as an image."),
+        )
         self.step("a refused key (401) fails the prompt", refused_key)
 
         passed = sum(1 for ok, *_ in self.results if ok)
