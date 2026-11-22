@@ -8,7 +8,14 @@ Trusapien Creative Validation API and holds no logic of its own beyond that.
 ## Status
 - 2026-11-19: connected to the API (it was a placeholder that returned the input
   image and said "processed successfully"). Checked against a local copy of the
-  service; **never run inside ComfyUI, and never against the production API**.
+  service.
+- 2026-11-22: **run inside a real, headless ComfyUI** (CPU only) against
+  `tools/stub_service.py`, a stub that answers like the service. Two bugs found
+  and fixed there (greyscale and bfloat16 frames crashed `to_png`), and one
+  found by it (fp16 frames gave different PNG bytes, so the same image was paid
+  for twice). See "Verified inside ComfyUI".
+- **Never run against the production API, nor against the real service with its
+  analysis vendor.** No GPU, no browser UI.
 - `DEFAULT_API_URL` (`https://creative-validation.trusapien.com`) is a proposed
   address, not a live one.
 
@@ -17,7 +24,12 @@ Trusapien Creative Validation API and holds no logic of its own beyond that.
   read a result file, turn refusals into sentences.
 - `trusapien_node.py`: tensors to PNG and back, the batch limit, the node class.
 - `__init__.py`: the mappings ComfyUI scans for. Must stay at the root.
-- `tests/`: `pytest tests` (23 pass, 1 skip). `tests/pytest.ini` keeps pytest's
+- `tools/`: development only, never imported by the node. `stub_service.py`
+  (a stand-in for the API), `run_in_comfyui.py` (drives the node through a
+  running ComfyUI's HTTP API), `comfyui_dev_nodes/` (two dev nodes that run
+  needs: a tensor probe and a dtype/channel cast; symlink into a *test* ComfyUI).
+- `tests/`: `pytest tests` (38 pass, 1 skip; `test_stub.py` runs the real
+  client against the stub). `tests/pytest.ini` keeps pytest's
   root inside `tests/`; with it at the repository root pytest imports the root
   `__init__.py` as a package and its relative import fails.
 
@@ -36,5 +48,61 @@ Trusapien Creative Validation API and holds no logic of its own beyond that.
 - Map names (`heat`, `fog`, `trust_heat`, ...) are the result-file names the API
   returns under `results.`.
 - `torch` is imported inside `validate_creative`, so the tests run without it
-  using a numpy stand-in. That checks the node's logic, not torch.
+  using a numpy stand-in. That checks the node's logic, not torch; torch itself
+  is checked by `tools/run_in_comfyui.py`.
+- `to_png` rounds (it does not truncate) and always writes RGB: the PNG bytes are
+  the idempotency key, and an 8-bit image must give the same bytes in float32
+  and float16 (`--fp16-intermediates`) and with or without an alpha channel.
+- The service's maps are JPEG at its own size; `to_array` resizes them to the
+  input's size and returns float32.
 - The version lives in two places: `pyproject.toml` and `USER_AGENT` in the client.
+
+## Verified inside ComfyUI
+Run on 2026-11-22, headless, in a fresh empty directory outside the repo (`$D`):
+
+- ComfyUI commit `4c2b826d74a1827f5cc4a706608fc4653ed12972` (master,
+  2026-11-22), version 0.46.0, frontend package 1.59.11.
+- Python 3.12.16 (uv-managed; the machine had no system Python), torch
+  2.15.0+cpu, numpy 2.5.4, Pillow 13.0.0, requests 2.34.2, av 19.0.2. Linux x86_64.
+
+```bash
+uv python install 3.12
+git clone https://github.com/comfyanonymous/ComfyUI $D/ComfyUI
+uv venv --python 3.12 $D/venv
+uv pip install --python $D/venv torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+uv pip install --python $D/venv -r $D/ComfyUI/requirements.txt -r requirements.txt
+ln -s "$PWD" $D/ComfyUI/custom_nodes/ComfyUI-Trusapien
+ln -s "$PWD/tools/comfyui_dev_nodes" $D/ComfyUI/custom_nodes/trusapien-dev-nodes
+$D/venv/bin/python tools/stub_service.py --port 8765 &
+(cd $D/ComfyUI && TRUSAPIEN_API_URL=http://127.0.0.1:8765 TRUSAPIEN_API_KEY=stub-key \
+  $D/venv/bin/python main.py --cpu --listen 127.0.0.1 --port 8188) &
+$D/venv/bin/python tools/run_in_comfyui.py --comfy http://127.0.0.1:8188 --stub http://127.0.0.1:8765
+```
+
+Also run with a second ComfyUI started with `--fp16-intermediates` on port 8189
+(LoadImage then hands the node `torch.float16`), and with both against the same
+stub: one file analysed by the float32 instance was not paid for again by the
+fp16 one.
+
+What it showed: the pack imports as a custom node (relative imports fine, no
+"IMPORT FAILED"); `/object_info/TrusapienValidationNode` gives the declared
+inputs, outputs and the nine map choices; `run_in_comfyui.py` passes 15/15:
+float32 `[B,H,W,3]` maps in 0..1 at the input size from half-size JPEGs; batches
+of 1, 2, 8 give B maps and B analyses; 9 is refused with no request sent; RGBA
+PNG, RGBA/grey/fp16/bf16/non-contiguous tensors work; the same image and
+objectives again (node executed, not cached) is no new analysis; a missing map
+and a 401 fail the prompt with the `[Trusapien] ...` sentence and no output.
+
+The stub (`tools/stub_service.py`) is what the client relies on, not the
+service's full contract: upload with Idempotency-Key, `processing` for 1 s then
+`done`, the nine `results.*` maps as JPEG at half size, the eleven metrics
+(made up), `objectives_error`/`benchmarks`/`impact` always null. Modes: `--omit
+MAP`, `--reject-all`, or `POST /_stub/mode` at runtime; `GET /_stub/stats`
+counts analyses (distinct keys).
+
+**Not done:** never against the production API or the real service (so not the
+real ~20 s analysis time, real objectives/benchmarks, or real error bodies); no
+GPU (the `.detach().cpu().float()` path is exercised on CPU tensors and a fake
+in the unit tests only); no browser UI, no ComfyUI Manager or registry install,
+no Windows portable build; `trusapien_example_workflow.json` (UI format) was not
+loaded: the run uses API-format prompts.

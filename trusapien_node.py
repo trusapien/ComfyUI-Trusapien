@@ -12,20 +12,61 @@ from .trusapien_client import MAPS, Client, TrusapienError, parse_objectives, re
 MAX_BATCH = 8
 
 
+def _as_numpy(frame) -> "np.ndarray":
+    """A frame as a float32 numpy array, from a torch tensor wherever it lives.
+
+    `.numpy()` alone fails on a tensor on the GPU, one that requires grad, and
+    one in bfloat16 (all of which other nodes hand on); so detach, move, widen.
+    Duck-typed, so this module does not import torch.
+    """
+    if hasattr(frame, "detach"):
+        frame = frame.detach()
+    if hasattr(frame, "cpu"):
+        frame = frame.cpu()
+    if hasattr(frame, "float") and hasattr(frame, "numpy"):
+        frame = frame.float().numpy()
+    return np.asarray(frame, dtype=np.float32)
+
+
 def to_png(frame) -> bytes:
-    """One ComfyUI image ([H, W, C], floats 0..1) as PNG bytes."""
-    array = np.clip(np.asarray(frame.cpu().numpy() if hasattr(frame, "cpu") else frame) * 255.0, 0, 255)
+    """One ComfyUI image ([H, W, C], floats 0..1) as RGB PNG bytes.
+
+    One channel is taken as grey and four as RGB plus alpha, which is dropped as
+    ComfyUI's own LoadImage does.
+
+    Values are rounded, not truncated: the bytes are the idempotency key, and an
+    8-bit image must give the same bytes whether ComfyUI holds it in float32 or
+    float16 (`--fp16-intermediates`); truncated, half of the levels came out one
+    lower in float16 and the same image was paid for twice.
+    """
+    array = _as_numpy(frame)
+    if array.ndim == 2:
+        array = array[:, :, None]
+    if array.ndim != 3 or array.shape[2] not in (1, 2, 3, 4):
+        raise TrusapienError(
+            f"The image has shape {list(array.shape)}; expected height x width x 1 to 4 channels."
+        )
+    if array.shape[2] in (1, 2):  # grey, or grey plus alpha
+        array = np.repeat(array[:, :, :1], 3, axis=2)
+    elif array.shape[2] == 4:
+        array = array[:, :, :3]
+    array = np.clip(np.round(np.nan_to_num(array) * 255.0), 0, 255)
     buffer = io.BytesIO()
     Image.fromarray(array.astype(np.uint8)).save(buffer, format="PNG")
     return buffer.getvalue()
 
 
 def to_array(content: bytes, size) -> "np.ndarray":
-    """Result file bytes as a [H, W, 3] float array, at the input image's size."""
-    picture = Image.open(io.BytesIO(content)).convert("RGB")
+    """Result file bytes (JPEG, at the service's own size) as a [H, W, 3] float32 array at `size`."""
+    try:
+        picture = Image.open(io.BytesIO(content))
+        picture.load()
+    except Exception:
+        raise TrusapienError("The heat map the API returned could not be read as an image.") from None
+    picture = picture.convert("RGB")
     if picture.size != size:
-        picture = picture.resize(size, Image.LANCZOS)
-    return np.asarray(picture).astype(np.float32) / 255.0
+        picture = picture.resize(size, Image.LANCZOS)  # Image.Resampling needs Pillow 9.1
+    return np.ascontiguousarray(np.asarray(picture), dtype=np.float32) / np.float32(255.0)
 
 
 class TrusapienValidationNode:
