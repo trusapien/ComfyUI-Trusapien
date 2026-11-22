@@ -68,11 +68,21 @@
       ],
       "outputs": [
         {
-          "name": "image",
+          "name": "heatmap",
           "type": "IMAGE",
           "links": [
             2
           ]
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": null
+        },
+        {
+          "name": "metrics_json",
+          "type": "STRING",
+          "links": null
         },
         {
           "name": "status",
@@ -84,7 +94,9 @@
         "Node name for S&R": "TrusapienValidationNode"
       },
       "widgets_values": [
-        "PASTE_YOUR_API_KEY_HERE"
+        "Attention",
+        "",
+        ""
       ],
       "widgets_values_named": {
         "api_key": "PASTE_YOUR_API_KEY_HERE"
