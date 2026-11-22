@@ -19,6 +19,11 @@ Trusapien Creative Validation API and holds no logic of its own beyond that.
   that is missing, listed but 404, or not an image, and an analysis with no
   maps, each stop the prompt with one `[Trusapien] ...` sentence; rerun inside
   ComfyUI, 18/18.
+- 2026-11-22 (example): `trusapien_example_workflow.json` rewritten for the current
+  node (LoadImage `example.png` -> node -> two previews, a Note about
+  `TRUSAPIEN_API_KEY`, no key anywhere) and run inside ComfyUI against the stub
+  with `run_in_comfyui.py --example`: heat map produced at the input size; 18/18
+  still pass. `assets/workflow_demo.png` still shows the old placeholder workflow.
 - **Never run against the production API, nor against the real service with its
   analysis vendor.** No GPU, no browser UI.
 - `DEFAULT_API_URL` (`https://creative-validation.trusapien.com`) is a proposed
@@ -31,10 +36,14 @@ Trusapien Creative Validation API and holds no logic of its own beyond that.
 - `__init__.py`: the mappings ComfyUI scans for. Must stay at the root.
 - `tools/`: development only, never imported by the node. `stub_service.py`
   (a stand-in for the API), `run_in_comfyui.py` (drives the node through a
-  running ComfyUI's HTTP API), `comfyui_dev_nodes/` (two dev nodes that run
+  running ComfyUI's HTTP API; `--example` converts the saved UI-format example
+  workflow to an API prompt with `workflow_to_prompt` and runs it),
+  `comfyui_dev_nodes/` (two dev nodes that run
   needs: a tensor probe and a dtype/channel cast; symlink into a *test* ComfyUI).
-- `tests/`: `pytest tests` (56 pass, 1 skip; `test_stub.py` runs the real
-  client against the stub; `test_packaging.py` checks pyproject.toml against
+- `tests/`: `pytest tests` (65 pass, 1 skip; `test_stub.py` runs the real
+  client against the stub; `test_workflow.py` checks the example workflow's links,
+  widget values against `INPUT_TYPES`, that no key is in it, and the converter;
+  `test_packaging.py` checks pyproject.toml against
   requirements.txt and `USER_AGENT`, and skips on Python < 3.11 without `tomli`).
   `tests/pytest.ini` keeps pytest's
   root inside `tests/`; with it at the repository root pytest imports the root
@@ -77,6 +86,10 @@ Trusapien Creative Validation API and holds no logic of its own beyond that.
   and float16 (`--fp16-intermediates`) and with or without an alpha channel.
 - The service's maps are JPEG at its own size; `to_array` resizes them to the
   input's size and returns float32.
+- The example workflow is the browser's save format: `widgets_values` are
+  positional, in `INPUT_TYPES` order (`heatmap`, `api_key`, `objectives_json`).
+  Adding or reordering a widget input breaks it; `tests/test_workflow.py` says so.
+  `/prompt` does not take that format; `run_in_comfyui.py --example` converts it.
 - The version lives in two places: `pyproject.toml` and `USER_AGENT` in the
   client; `tests/test_packaging.py` checks they match. A release is a `v<version>`
   tag; `publish.yml` refuses any other tag.
@@ -120,6 +133,13 @@ no maps at all, a listed map that 404s, a map that is not an image, and a 401
 fail the prompt with the `[Trusapien] ...` sentence (a `RuntimeError` whose
 traceback stops at the node, no Pillow or requests frames) and no output.
 
+The example workflow (same commit and versions, fresh install, `example.png` from
+ComfyUI's own `input/`): `run_in_comfyui.py --example` sends LoadImage ->
+Trusapien (`Attention`, empty key, so `TRUSAPIEN_API_KEY` is used) -> two
+PreviewImage (the Note is not sent); 2/2: the heat map preview is 768x768 like
+`example.png` and differs from it; first run 1 new analysis, a rerun 0. The old
+file, run the same way, fails at `original.jpeg` (404).
+
 The stub (`tools/stub_service.py`) is what the client relies on, not the
 service's full contract: upload with Idempotency-Key, `processing` for 1 s then
 `done`, the nine `results.*` maps as JPEG at half size, the eleven metrics
@@ -132,5 +152,7 @@ counts analyses (distinct keys).
 real ~20 s analysis time, real objectives/benchmarks, or real error bodies); no
 GPU (the `.detach().cpu().float()` path is exercised on CPU tensors and a fake
 in the unit tests only); no browser UI, no ComfyUI Manager or registry install,
-no Windows portable build; `trusapien_example_workflow.json` (UI format) was not
-loaded: the run uses API-format prompts.
+no Windows portable build; `trusapien_example_workflow.json` was never opened in
+the browser: `--example` converts it to an API prompt by hand (same nodes, links
+and widget values), so how the frontend draws it (node sizes, the Note) is
+unchecked.
