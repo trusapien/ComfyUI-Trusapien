@@ -33,8 +33,8 @@ Trusapien Creative Validation API and holds no logic of its own beyond that.
   registry docs and publish-node-action on that date.
 - **Never run against the production API, nor against the real service with its
   analysis vendor.** No GPU, no browser UI.
-- `DEFAULT_API_URL` (`https://creative-validation.trusapien.com`) is a proposed
-  address, not a live one.
+- `DEFAULT_API_URL` is `https://creative-api.trusapien.com`, the service's public address since
+  2026-11-22. The node has not been run against it yet.
 
 ## Layout
 - `trusapien_client.py`: the HTTP client. No ComfyUI, no torch. Upload, poll,

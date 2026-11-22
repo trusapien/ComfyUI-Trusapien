@@ -16,7 +16,7 @@ import time
 
 import requests
 
-DEFAULT_API_URL = "https://creative-validation.trusapien.com"
+DEFAULT_API_URL = "https://creative-api.trusapien.com"
 USER_AGENT = "ComfyUI-Trusapien/0.2.0"
 
 #: Heat map choice in the node -> the result file's name at the API (`results.<name>`).
