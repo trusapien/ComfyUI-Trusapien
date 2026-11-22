@@ -7,6 +7,10 @@ Development only. ComfyUI must have been started with this repository in
 
     python tools/run_in_comfyui.py --comfy http://127.0.0.1:8188 --stub http://127.0.0.1:8765
 
+With `--example`, it runs `trusapien_example_workflow.json` instead: the saved
+(UI-format) workflow is turned into an API-format prompt from its nodes, links
+and widget values (`workflow_to_prompt`), queued, and checked for a heat map.
+
 Everything goes through ComfyUI's HTTP API, the way the browser would send it:
 upload images, queue API-format prompts, read /history. Exits 0 only if every
 check passes. Needs Pillow and numpy; nothing from ComfyUI or torch.
@@ -21,11 +25,15 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
 NODE = "TrusapienValidationNode"
+EXAMPLE = Path(__file__).resolve().parents[1] / "trusapien_example_workflow.json"
+WIDGET_TYPES = {"COMBO", "STRING", "INT", "FLOAT", "BOOLEAN"}
+FRONTEND_ONLY = {"Note", "MarkdownNote"}  # drawn by the browser, never executed
 MAPS = [
     "Attention", "Fog", "Cognitive Demand", "Engagement", "Memory", "Clarity", "Trust", "Intent", "Avoidance",
 ]
@@ -51,6 +59,55 @@ class Failed(AssertionError):
 def check(condition, message):
     if not condition:
         raise Failed(message)
+
+
+def _is_widget(spec):
+    kind = spec[0]
+    options = spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {}
+    return (isinstance(kind, list) or kind in WIDGET_TYPES) and not options.get("forceInput")
+
+
+def workflow_to_prompt(workflow, object_info):
+    """A saved UI-format workflow as the API-format prompt `/prompt` takes.
+
+    `/prompt` does not accept the file the browser saves: that one lists nodes
+    with positional `widgets_values` and links as `[id, from, slot, to, slot,
+    type]`. Each node's inputs are walked in its class's declared order
+    (`object_info`): a linked input becomes `[from_id, slot]`, a widget takes the
+    next `widgets_values` entry (plus the `control_after_generate` value the
+    browser stores after a seed). Values left over (LoadImage's "upload" button)
+    are not inputs. Note nodes are dropped; a muted, bypassed or unknown node is
+    refused rather than guessed at.
+    """
+    links = {link[0]: link for link in workflow["links"]}
+    prompt = {}
+    for node in workflow["nodes"]:
+        kind = node["type"]
+        if kind in FRONTEND_ONLY:
+            continue
+        check(kind in object_info, f"node {node['id']}: ComfyUI has no node type {kind!r}")
+        check(node.get("mode", 0) == 0, f"node {node['id']} ({kind}) is muted or bypassed")
+        info = object_info[kind]["input"]
+        order = object_info[kind].get("input_order") or {section: list(info.get(section, {})) for section in info}
+        linked = {item["name"]: links[item["link"]] for item in node.get("inputs", []) if item.get("link") is not None}
+        values = list(node.get("widgets_values") or [])
+        inputs = {}
+        for section in ("required", "optional"):
+            for name in order.get(section, []):
+                spec = info[section][name]
+                if _is_widget(spec):
+                    check(values, f"node {node['id']} ({kind}): no widget value left for {name!r}")
+                    inputs[name] = values.pop(0)
+                    options = spec[1] if len(spec) > 1 and isinstance(spec[1], dict) else {}
+                    if spec[0] == "INT" and options.get("control_after_generate") and values:
+                        values.pop(0)
+                if name in linked:  # a link wins over the widget value it replaces
+                    link = linked[name]
+                    inputs[name] = [str(link[1]), link[2]]
+                elif section == "required" and name not in inputs:
+                    raise Failed(f"node {node['id']} ({kind}): required input {name!r} is not connected")
+        prompt[str(node["id"])] = {"class_type": kind, "inputs": inputs}
+    return prompt
 
 
 class Http:
@@ -375,17 +432,72 @@ class Run:
         )
         self.step("a refused key (401) fails the prompt", refused_key)
 
+        return self.summary()
+
+    def summary(self):
         passed = sum(1 for ok, *_ in self.results if ok)
         print(f"\n{passed}/{len(self.results)} checks passed. Stub: {json.dumps(self.stats())}")
         return 0 if passed == len(self.results) else 1
+
+    def example(self, path):
+        """Run the saved example workflow, as a user who opened it would, and check its heat map."""
+        workflow = json.loads(Path(path).read_text(encoding="utf-8"))
+        state = {}
+
+        def convert():
+            state["prompt"] = prompt = workflow_to_prompt(workflow, self.comfy.get("/object_info"))
+            for key, node in prompt.items():
+                print(f"      {key}: {json.dumps(node)}", flush=True)
+            kinds = sorted(node["class_type"] for node in prompt.values())
+            check(NODE in kinds, f"no {NODE} in the prompt")
+            return f"{len(prompt)} nodes: {', '.join(kinds)}"
+
+        def run():
+            prompt = state["prompt"]
+            node_id = next(key for key, node in prompt.items() if node["class_type"] == NODE)
+            previews = {  # PreviewImage node id -> which Trusapien output it shows
+                key: node["inputs"]["images"][1] for key, node in prompt.items()
+                if node["class_type"] == "PreviewImage" and node["inputs"]["images"][0] == node_id
+            }
+            heat = next((key for key, slot in previews.items() if slot == 0), None)
+            check(heat is not None, "no PreviewImage shows the heatmap output")
+            source = next(node for node in prompt.values() if node["class_type"] == "LoadImage")["inputs"]["image"]
+            original = self.view({"filename": source, "type": "input"}).convert("RGB")
+
+            self.free()
+            before = self.stats()
+            entry = self.queue(prompt)
+            error = self.error_of(entry)
+            check(entry["status"].get("status_str") == "success", f"prompt failed: {error and error['exception_message']}")
+            after = self.stats()
+            for key in previews:
+                check(len(entry["outputs"].get(key, {}).get("images", [])) == 1, f"PreviewImage {key} shows no image")
+            heatmap = self.view(entry["outputs"][heat]["images"][0]).convert("RGB")
+            check(heatmap.size == original.size, f"heat map is {heatmap.size}, {source} is {original.size}")
+            difference = np.abs(np.asarray(heatmap, np.int16) - np.asarray(original, np.int16)).mean()
+            check(difference > 1.0, "the heat map preview is the input image")
+            return (
+                f"heat map {heatmap.size[0]}x{heatmap.size[1]} (= {source}), mean |map - input| {difference:.1f}/255; "
+                f"stub: {after['uploads'] - before['uploads']} upload, {after['analyses'] - before['analyses']} new analyses"
+            )
+
+        self.step(f"convert {Path(path).name} to an API prompt", convert)
+        if "prompt" in state:
+            self.step("queue it: the heat map preview is produced", run)
+        return self.summary()
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--comfy", default="http://127.0.0.1:8188")
     parser.add_argument("--stub", default="http://127.0.0.1:8765")
+    parser.add_argument(
+        "--example", nargs="?", const=str(EXAMPLE), metavar="WORKFLOW",
+        help="run a saved UI-format workflow (default: the repository's example) instead of the checks",
+    )
     options = parser.parse_args()
-    sys.exit(Run(options.comfy, options.stub).main())
+    run = Run(options.comfy, options.stub)
+    sys.exit(run.example(options.example) if options.example else run.main())
 
 
 if __name__ == "__main__":
