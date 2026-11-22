@@ -108,6 +108,7 @@ Images you send are stored by Trusapien together with their results for 30 days,
 
 ```bash
 pip install requests pillow numpy pytest
+pip install tomli            # only on Python < 3.11, for tests/test_packaging.py (it skips without it)
 pytest tests                 # no ComfyUI or torch needed
 ```
 
