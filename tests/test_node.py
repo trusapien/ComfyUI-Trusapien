@@ -89,7 +89,7 @@ def test_no_key_stops_the_workflow_instead_of_passing_the_image_on(node, monkeyp
 
 
 def test_a_map_the_analysis_does_not_have_is_named(node):
-    with pytest.raises(RuntimeError, match="no Trust map.*heat"):
+    with pytest.raises(RuntimeError, match="no Trust map.*Maps it does have: Attention"):
         node.validate_creative(np.zeros((1, 4, 4, 3), dtype=np.float32), heatmap="Trust")
 
 
@@ -177,8 +177,8 @@ def test_a_jpeg_map_at_another_size_comes_back_float32_at_the_input_size(node_mo
 
 
 def test_a_map_that_is_not_an_image_is_a_sentence(node_module, client_module):
-    with pytest.raises(client_module.TrusapienError, match="could not be read"):
-        node_module.to_array(b"<html>not a picture</html>", (4, 4))
+    with pytest.raises(client_module.TrusapienError, match="^The Trust map the API returned could not be read"):
+        node_module.to_array(b"<html>not a picture</html>", (4, 4), "Trust")
 
 
 def test_the_heatmap_output_is_float32(node):
@@ -186,8 +186,77 @@ def test_the_heatmap_output_is_float32(node):
     assert heatmap.dtype == np.float32 and heatmap.shape == (2, 6, 8, 3)
 
 
-def test_the_map_choices_are_the_services_result_files(client_module):
-    assert set(client_module.MAPS.values()) == {
-        "heat", "fog", "trust_heat", "intent_heat", "avoidance_heat", "memory_heat",
-        "clarity_heat", "cognitive_demand_heat", "engagement_new_heat",
-    }
+# -- the real client over a scripted API: a map that is missing or broken ------
+
+FRAME = np.zeros((1, 4, 4, 3), dtype=np.float32)
+
+
+def done(*keys):
+    return {"id": "v-1", "status": "done", "metrics": {"focus": 70}, "assets": [{"key": k} for k in keys]}
+
+
+@pytest.fixture
+def api(node_module, client_module, scripted, monkeypatch):
+    """Runs the node with the real Client against answers given in order."""
+    Session, Response = scripted
+    monkeypatch.setenv("TRUSAPIEN_API_KEY", "cv_env")
+
+    def answer(*answers):
+        session = Session(*answers)
+        monkeypatch.setattr(
+            node_module,
+            "Client",
+            lambda key: client_module.Client(key, base_url="https://api.test", session=session, sleep=lambda _: None),
+        )
+        return session
+
+    return answer, Response
+
+
+def failure(node_module, **inputs):
+    with pytest.raises(RuntimeError) as raised:
+        node_module.TrusapienValidationNode().validate_creative(FRAME, **inputs)
+    error = raised.value
+    assert error.__cause__ is None and error.__suppress_context__  # one sentence, no chained traceback
+    return str(error)
+
+
+def test_the_chosen_map_present_comes_back(node_module, api):
+    answer, Response = api
+    answer(Response(200, done("original", "results.heat", "results.trust_heat")), Response(200, content=jpeg(2, 2)))
+    heatmap, *_ = node_module.TrusapienValidationNode().validate_creative(FRAME, heatmap="Trust")
+    assert heatmap.shape == (1, 4, 4, 3)
+
+
+def test_a_map_not_returned_names_the_maps_that_were(node_module, api):
+    answer, Response = api
+    answer(Response(200, done("original", "results.fog", "results.heat")))
+    assert failure(node_module, heatmap="Trust") == (
+        "[Trusapien] The analysis has no Trust map for this image. Maps it does have: Attention, Fog."
+    )
+
+
+def test_an_analysis_with_no_maps_says_none(node_module, api):
+    answer, Response = api
+    answer(Response(200, done()))
+    assert failure(node_module) == (
+        "[Trusapien] The analysis has no Attention map for this image. Maps it does have: none."
+    )
+
+
+def test_a_listed_map_that_is_not_there_is_a_sentence(node_module, api):
+    answer, Response = api
+    answer(Response(200, done("results.trust_heat")), Response(404, {"detail": "No such asset."}))
+    assert failure(node_module, heatmap="Trust") == (
+        "[Trusapien] The analysis lists a Trust map, but it could not be downloaded. "
+        "The Trusapien API answered with an error: No such asset."
+    )
+
+
+@pytest.mark.parametrize("content", [b"<html>not a picture</html>", b"", jpeg(64, 64)[:300]], ids=["html", "empty", "cut-short"])
+def test_a_map_that_is_not_an_image_stops_the_prompt_with_a_sentence(node_module, api, content):
+    answer, Response = api
+    answer(Response(200, done("results.trust_heat")), Response(200, content=content))
+    assert failure(node_module, heatmap="Trust") == (
+        "[Trusapien] The Trust map the API returned could not be read as an image."
+    )
