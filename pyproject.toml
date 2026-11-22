@@ -1,13 +1,31 @@
+# Comfy Registry metadata. Field names follow docs.comfy.org/registry/specifications
+# and docs.comfy.org/registry/publishing (read 2026-11-22).
+
 [project]
-name = "comfyui-trusapien"
+# The registry node id: users install with `comfy node install <name>`.
+# TODO(Kaan): confirm before the first publish; the registry does not allow changing it afterwards.
+name = "trusapien-creative-validation"
+# Keep equal to USER_AGENT in trusapien_client.py (tests/test_packaging.py checks it).
 version = "0.2.0"
 description = "Creative validation for ad images inside ComfyUI: attention heat maps and predicted-attention metrics from the Trusapien API."
-license = "MIT"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+# Keep equal to requirements.txt (tests/test_packaging.py checks it). ComfyUI provides torch.
 dependencies = ["requests>=2.28.0", "Pillow>=9.0.0", "numpy>=1.20.0"]
 
 [project.urls]
 Repository = "https://github.com/trusapien/ComfyUI-Trusapien"
+Documentation = "https://github.com/trusapien/ComfyUI-Trusapien#readme"
+"Bug Tracker" = "https://github.com/trusapien/ComfyUI-Trusapien/issues"
+# Same URL again: the specification names the key "Bug Tracker", but comfy-cli 1.28.0
+# (what publish-node-action installs) sends only the "Issues" key to the registry.
+Issues = "https://github.com/trusapien/ComfyUI-Trusapien/issues"
 
 [tool.comfy]
-PublisherId = "trusapien"
+PublisherId = "trusapien" # TODO(Kaan): must equal the publisher id created on registry.comfy.org
 DisplayName = "ComfyUI-Trusapien"
+# TODO(Kaan): Icon = "<public https URL of the icon>"
+#   SVG, PNG, JPG or GIF; square, at most 400x400 px per the specification page
+#   (the `comfy node init` template on the publishing page says 800x400).
+# requires-comfyui is left out: only ComfyUI 0.46.0 has been run, and the node uses no
+# version-specific ComfyUI API.

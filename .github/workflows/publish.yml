@@ -1,0 +1,61 @@
+# Publishes to the Comfy Registry when a version tag (v<pyproject version>) is pushed.
+# Follows docs.comfy.org/registry/publishing ("Option 2: Github Actions") and the
+# Comfy-Org/publish-node-action README, which both reference the action at @main.
+# Needs the repository secret REGISTRY_ACCESS_TOKEN (a registry publishing API key).
+name: Publish to Comfy registry
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch: # run it on a tag ("Use workflow from" -> the v* tag), not a branch
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check tag and run tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Tag must equal v<pyproject version>
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          version="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          if [ "$REF_TYPE" != "tag" ]; then
+            echo "::error::Publish runs on a tag; this run is on $REF_TYPE '$REF_NAME'. Push or select the tag v$version."
+            exit 1
+          fi
+          if [ "$REF_NAME" != "v$version" ]; then
+            echo "::error::Tag '$REF_NAME' does not match pyproject.toml version '$version' (expected 'v$version')."
+            exit 1
+          fi
+          echo "Tag $REF_NAME matches pyproject.toml version $version."
+      - name: Install test dependencies
+        run: python -m pip install -r requirements.txt pytest
+      - name: Run tests
+        run: python -m pytest tests
+
+  publish:
+    name: Publish Custom Node to registry
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+      - name: Publish Custom Node
+        uses: Comfy-Org/publish-node-action@main
+        with:
+          personal_access_token: ${{ secrets.REGISTRY_ACCESS_TOKEN }}

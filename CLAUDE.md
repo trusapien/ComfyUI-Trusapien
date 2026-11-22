@@ -33,10 +33,21 @@ Trusapien Creative Validation API and holds no logic of its own beyond that.
   (a stand-in for the API), `run_in_comfyui.py` (drives the node through a
   running ComfyUI's HTTP API), `comfyui_dev_nodes/` (two dev nodes that run
   needs: a tensor probe and a dtype/channel cast; symlink into a *test* ComfyUI).
-- `tests/`: `pytest tests` (53 pass, 1 skip; `test_stub.py` runs the real
-  client against the stub). `tests/pytest.ini` keeps pytest's
+- `tests/`: `pytest tests` (56 pass, 1 skip; `test_stub.py` runs the real
+  client against the stub; `test_packaging.py` checks pyproject.toml against
+  requirements.txt and `USER_AGENT`, and skips on Python < 3.11 without `tomli`).
+  `tests/pytest.ini` keeps pytest's
   root inside `tests/`; with it at the repository root pytest imports the root
   `__init__.py` as a package and its relative import fails.
+- `pyproject.toml`: Comfy Registry metadata (field names from
+  docs.comfy.org/registry/specifications). Node id `trusapien-creative-validation`,
+  permanent once published; it, `PublisherId` and `Icon` are TODO(Kaan).
+  `requirements.txt` lists exactly `[project].dependencies` (never torch: ComfyUI
+  provides it). `.comfyignore` keeps `tests/`, `tools/`, `.github/` out of the
+  registry archive (`comfy node pack` shows what ships).
+- `.github/workflows/`: `test.yml` (pytest on 3.10 and 3.12), `publish.yml`
+  (on a `v*` tag: checks tag == `v<version>`, runs the tests, then
+  `Comfy-Org/publish-node-action@main` with the `REGISTRY_ACCESS_TOKEN` secret).
 
 ## Rules
 - **Every image is one paid analysis.** Keep the idempotency key a hash of the
@@ -66,7 +77,9 @@ Trusapien Creative Validation API and holds no logic of its own beyond that.
   and float16 (`--fp16-intermediates`) and with or without an alpha channel.
 - The service's maps are JPEG at its own size; `to_array` resizes them to the
   input's size and returns float32.
-- The version lives in two places: `pyproject.toml` and `USER_AGENT` in the client.
+- The version lives in two places: `pyproject.toml` and `USER_AGENT` in the
+  client; `tests/test_packaging.py` checks they match. A release is a `v<version>`
+  tag; `publish.yml` refuses any other tag.
 
 ## Verified inside ComfyUI
 Run on 2026-11-22, headless, in a fresh empty directory outside the repo (`$D`):
